@@ -1,0 +1,237 @@
+Static Analysis in Go
+27 Oct 2018
+
+Muir Manders
+Software Engineer, RetailNext
+muir@retailnext.net
+
+* Overview
+
+The goal of this talk is to encourage you to write custom static analysis tests for your codebase. Existing tools can catch generic errors, but often your team and your code can benefit from specialized checks.
+
+- what is static analysis and why is it useful?
+- how to invoke Go static analysis tools
+- examples of writing Go static analysis checks
+
+I'm showcasing Go, but I encourage you to look at tools available for your language.
+
+* What is static (code) analysis?
+
+Static code analysis means analyzing code without running it. Linters are a common example of programs that perform static analysis.
+
+- check for certain types of programming errors
+  for (var i = 0; i < users.length; i++) {
+    var user = users[i]; // Oops, not scoped to "for" loop
+    setTimeout(function() { console.log(user.name); }, 500);
+  }
+
+- check for adherence to style guidelines
+  function
+    cREATE_USEr (
+      id, email,
+      cb       ) { if (!id) return cb("missing id!");
+    }
+
+: we use static analysis for two main things
+: johnny hotcoder joins the team
+
+* Go
+
+Good for static analysis
+
+- statically typed
+- compiler tool chain written in go
+- relatively simple syntax
+- small set of language features
+
+: what makes go well suited for static analysis
+
+* Step 1: Generate the AST
+
+Static analysis typically starts by parsing the code into an AST (Abstract Syntax Tree). The analysis works with the AST data structure rather than looking directly at the textual source code.
+
+ Code:
+    if a == 0 {
+      return true
+    }
+
+ AST:
+          if statement
+             /   \
+            /     \
+        binary   block
+        / |  \      \
+     "a"  EQ  0    return
+                      \
+                     true
+
+: it is very tedious and error prone to try to match against the source code directly, so you always want to parse the code into a data structure
+
+* Parsing to AST in Go
+
+.code ast/square.go
+
+.play ast/walk_ast_types.go /START OMIT/,/END OMIT/
+
+: parser is a package in the standard library
+: errors omitted, don't do that
+: printing out only the types of the nodes, so you can see the tree structure
+
+* More details in the AST
+
+.code ast/single_var.go
+
+: last example demonstrated the tree structure, but here i want to show you all the information in the AST
+
+.play ast/print_ast.go /START OMIT/,/END OMIT/
+
+* Contrived Example
+
+.code ast/short_funcs.go /START OMIT/,/END OMIT/
+
+: you're reading some code, and you come across calls to p() and q(). it's annoying that the author is not helping you understand the code. ignoring documentation, it would be nice to at least have descriptive function name instead of p and q.
+: you decide it is reasonable to require functions to have at least 3 letters.
+
+* No Short Functions Names
+
+.play ast/func_name_length.go /START OMIT/,/END OMIT/
+
+: i should mention, if you are passive agressive, static tests should really appeal to you
+
+* Better Example
+
+.play types/time_eqeq.go
+
+: if you've used go, you may know about a gotcha when comparing time values. if you use ==, you compare everything in the time object, including the time zone and the monotonoic clock value, which is almost never what you want.
+: instead, you normally want to use the .Equal() method to compare time values
+
+* Looking for time.Time == time.Time
+
+.code types/find_time_eqeq_ast.go /START OMIT/,/END OMIT/
+
+*ast.BinaryExpr looks like this:
+
+	// A BinaryExpr node represents a binary expression.
+	BinaryExpr struct {
+		X     Expr        // left operand
+		OpPos token.Pos   // position of Op
+		Op    token.Token // operator
+		Y     Expr        // right operand
+	}
+
+* Go Type Checker
+
+You give the type checker the parsed AST, and it calculates:
+
+- type of every expression
+- definition and all uses of every "object"
+- mapping from AST identifiers to the typed objects they represent
+- scope hierarchy
+
+Knowing the type level information is very useful. You are essentially as powerful as the compiler itself. Many languages make the AST available, but very few make the type information easily available.
+
+* Invoking the type checker
+
+.code types/find_time_eqeq_types.go /SETUP_START OMIT/,/SETUP_END OMIT/
+
+: start by parsing AST
+: importer is an object that controls how the type checker looks up and loads other packages imported by your code
+: we have a types config object that controls various aspects of the type checked
+: and we have an types info object which gets filled in by the type checker
+
+* Looking for time.Time == time.Time v2
+
+.play types/find_time_eqeq_types.go /CHECK_START OMIT/,/CHECK_END OMIT/
+
+: we look up the "time" package and get a reference to the Time type so we have something to compare objects in the AST to
+: we walk the AST, and here is where we use our new type information
+: you will notice I didn't check the right side of the binary expression, and i didn't check the operator of the binary expression. the right side must also be a time.Time or it won't compile, and any operator like == or != are all potentially unsafe.
+
+* Best Example
+
+.code iterator/iterator.go /ITER_DEF_START OMIT/,/ITER_DEF_END OMIT/
+
+.code iterator/iterator.go /ITER_USE_START OMIT/,/ITER_USE_END OMIT/
+
+: here is an example taken straight out of our code. we have an iterator interface we use when iterating over database objects. the next method advances the iterator and tells you if there is something to read, and the close method propagates database errors
+
+* Iterator Misuse
+
+.code iterator/iterator.go /ITER_MISUSE_START OMIT/,/ITER_MISUSE_END OMIT/
+
+: a common problem is forgetting to close the iterator. most of the time it doesn't matter, but if there was a error, you may have only iterated some of the database records, which can lead to serious application bugs, depending on what the code is doing with the objects.
+
+* Find Missing Close()s
+
+.code iterator/find_iters.go /SETUP_START OMIT/,/SETUP_END OMIT/
+
+: since we refer to the Next method of the Iter type, won't confuse methods named Next() or Close() on other types
+
+* Find Missing Close()s
+
+.play iterator/find_iters.go /CHECK_START OMIT/,/CHECK_END OMIT/
+
+: simplifying a few details for brevity, but this is close to the test we use
+: in our previous example, each instance of "iter" is the same object in the type checker, but each one is a different identifier node in the AST
+
+* Not Perfect
+
+.code iterator/sneaky.go /START OMIT/,/END OMIT/
+
+: can make checks arbitrarily complex, but better to assume coworker is not adverserial
+: can also see calling .Close() might not be enough, code needs to check error
+
+* Other Challenges in Go
+
+- interface{}/reflection
+- "unsafe" package
+- cgo
+
+: empty interface is satisfied by any type into, allows for a non-type safe generic programming. often paired with reflection to inspect the true type of objects, create new objects of arbitrary types, call functions, etc
+: "unsafe" allows for arbitrary pointer casts and memory access
+: cgo lets you call into C code separate from the go runtime
+: all of these operate outside the Go type system - you're on your own
+
+* Successful Static Tests
+
+- No false positives
+
+Other developers will reject your tests if there are too many false positives. It is better to give up coverage in a few cases if it means eliminating false positives.
+
+- Clear errors
+
+The error message should give the exact cause and location of error. It is frustrating if the required change is not obvious.
+
+- No exceptions
+
+Avoid excepting particular code in your tests when possible. Other developers will be tempted to add their new code to the list of exceptions instead of fixing the errors.
+
+* Wrap Up
+
+To write your own checks I recommend you read the below linked document, then peruse existing static analysis checks to get a feeling for how to approach things.
+
+There is a learning curve, but once you get used to searching the AST and moving between the syntactic world and typed world, you can write sophisticated static checks with ease.
+
+Reading
+
+- [[https://github.com/golang/example/tree/master/gotypes]] - great info on golang ast/types
+
+Helper Packages
+
+- [[https://github.com/retailnext/stan]] - what we use to reduce boilerplate and make it easy to test our static tests
+- [[https://godoc.org/golang.org/x/tools/go/loader]] - some overlap with "stan", more featureful/complicated
+
+* Existing tools
+
+- [[https://github.com/golang/go/tree/master/src/cmd/vet]] built in "go vet" checks
+- [[https://godoc.org/golang.org/x/tools/go/analysis]] new framework for organizing static checks
+- [[https://github.com/mre/awesome-static-analysis#go]] various tools
+
+: a lot of useful static checks have already been written, but of course if you want custom checks for your codebase you will need to write them yourself.
+
+Even cooler
+
+- [[https://godoc.org/golang.org/x/tools/go/ssa]] generate SSA representation
+- [[https://godoc.org/golang.org/x/tools/go/pointer]] perform pointer analysis on SSA (find all potentiall callees from caller and vice versa, readers and writers of channels, and more)
+
+: if you want to play with something even cooler, there are some packages in the tools repo for generating and analyzing the Static Single Assignment representation of your code
