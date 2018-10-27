@@ -6,6 +6,8 @@ Software Engineer, RetailNext
 muir@retailnext.net
 https://github.com/muirmanders/static-analysis-talk
 
+: analytics for brick and mortar retail. offices in us and russia, use go in production a lot
+
 * Overview
 
 The goal of this talk is to encourage you to write custom static analysis tests for your codebase. Existing tools can catch generic errors, but often your team and your code can benefit from specialized checks.
@@ -46,6 +48,7 @@ Good for static analysis
 - small set of language features
 
 : what makes go well suited for static analysis
+: small set of features leaves more opportunities for user static analysis instead of compiler errors. in other languages w/ more language feautures the compiler can perform more checks, but the compiler can't check everything, so there is always opportunity for additional static analysis
 
 * Step 1: Generate the AST
 
@@ -96,8 +99,6 @@ Static analysis typically starts by parsing the code into an AST (Abstract Synta
 * No Short Functions Names
 
 .play ast/func_name_length.go /START OMIT/,/END OMIT/
-
-: i should mention, if you are passive agressive, static tests should really appeal to you
 
 * Better Example
 
